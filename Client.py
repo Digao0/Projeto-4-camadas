@@ -15,6 +15,8 @@ import struct
 from enlace import *
 import time
 import numpy as np
+import crcmod
+
 
 # voce deverá descomentar e configurar a porta com através da qual ira fazer comunicaçao
 #   para saber a sua porta, execute no terminal :
@@ -28,7 +30,8 @@ serialName = "com5"                  # Windows(variacao de)
 
 #formulario head:
 #0:4 byte - id do pacote
-#4:8 byte - tamanho do pacote
+#4:6 byte - tamanho do pacote
+#6:8 byte - CRC
 #9 byte - handshake Caso seja o hs, ent = hs=b'\x01'
 #10 byte - check - Envio correto: b'\x01'  - Envio incorreto: b'\xf0'
 #11 byte - quantos pacotes serao enviados
@@ -40,15 +43,15 @@ def divide_em_payload(array):
     return pacotes
 
 
-def monta_head(id,len_indiv,len_total , hs =b'\x00', check = b'\x01' ,final = b'\x00'): #numero do pacote #tamanho do pacote #verifica se a mensagem é um handshake
+def monta_head(id,len_indiv,len_total,CRC = b'\x02', hs =b'\x00', check = b'\x01' ,final = b'\x00'): #numero do pacote #tamanho do pacote #verifica se a mensagem é um handshake
     id_bytes = id.to_bytes(4, byteorder='big')
 
-    tamanho_bytes = len_indiv.to_bytes(4, byteorder='big')
+    tamanho_bytes = len_indiv.to_bytes(2, byteorder='big')
     
     packs_total = len_total.to_bytes(1, byteorder='big')
 
     
-    array_nova = id_bytes + tamanho_bytes + hs + check + packs_total + final # 4,8,9,10,11,12
+    array_nova = id_bytes + tamanho_bytes + CRC + hs + check + packs_total + final # 4,6,8,9,10,11,12
     return array_nova
     
 def monta_pacote(head,array_dados,end = b'\xff' * 3):
@@ -127,6 +130,10 @@ def main():
             for i in range(len(pacotes)):
                 print('entrou no for principal')
                 print(f'enviando pacote {i} de {len(pacotes)-1}')
+
+                #calcula CRC
+                
+
 
 
                 #head = monta_head(2,len(pacotes[i]),len_total=total_packs)#testar erro id
