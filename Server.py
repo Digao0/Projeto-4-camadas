@@ -15,6 +15,7 @@ import time
 import numpy as np
 import struct
 from Client import monta_head,monta_pacote
+import crcmod
 
 # voce deverá descomentar e configurar a porta com através da qual ira fazer comunicaçao
 #   para saber a sua porta, execute no terminal :
@@ -25,7 +26,7 @@ from Client import monta_head,monta_pacote
 #serialName = "/dev/ttyACM0"           # Ubuntu (variacao de)
 #serialName = "/dev/tty.usbmodem1411" # Mac    (variacao de)
 serialName = "COM5"                  # Windows(variacao de)
-
+crc16_func = crcmod.mkCrcFun(0x11021, initCrc=0xFFFF, xorOut=0x000)
 
 def main():
     try:
@@ -68,11 +69,14 @@ def main():
 
                 head, _ = com5.getData(12)
                 package_num =  struct.unpack('>I', head[:4])[0]  # Número do pacote
-                print(package_num)
+                print(f'pacote :{package_num}')
                 total_packs =  head[10]  # Total de pacotes
-                print(total_packs)
-                pacote_size = int.from_bytes(head[4:8], byteorder='big')
-                print(pacote_size)
+                print(f'total:{total_packs}')
+                pacote_size = int.from_bytes(head[4:6], byteorder='big')
+                print(f'tamanho:{pacote_size}')
+                CRC_esperado = int.from_bytes(head[6:8], byteorder='big')
+                print(f'CRC esperado{CRC_esperado}')
+
 
                 pacote, _ = com5.getData(pacote_size + 3)
                 print(f'recebeu {pacote}')
@@ -81,8 +85,12 @@ def main():
                 print(f'condicao 1 numero do pacote {package_num == last_package_num + 1}')
                 print(f'condicao 2 end of package {pacote[-3:] == (b'\xff' * 3)}')
 
+                #calulando CRC
+                CRC_calculado = crc16_func(pacote[:-3])
+                print(f'condicao 3 CRC iguais {CRC_calculado == CRC_esperado}')                
+
                 # Verifica se o número do pacote está correto e se o EOP está no local correto
-                if (package_num == last_package_num + 1) and (pacote[-3:] == (b'\xff' * 3)):
+                if (package_num == last_package_num + 1) and (pacote[-3:] == (b'\xff' * 3)) and CRC_calculado == CRC_esperado:
                     print('verificação correta')
                     rx_all_buffer.extend(pacote[:-3])  # Adiciona o payload ao buffer (exclui o EOP)
 

@@ -27,7 +27,7 @@ import crcmod
 #serialName = "/dev/ttyACM0"           # Ubuntu (variacao de)
 #serialName = "/dev/tty.usbmodem1411" # Mac    (variacao de)
 serialName = "com5"                  # Windows(variacao de)
-
+crc16_func = crcmod.mkCrcFun(0x11021, initCrc=0xFFFF, xorOut=0x000)
 #formulario head:
 #0:4 byte - id do pacote
 #4:6 byte - tamanho do pacote
@@ -37,19 +37,23 @@ serialName = "com5"                  # Windows(variacao de)
 #11 byte - quantos pacotes serao enviados
 #12 byte - byte de confirmacao final: final Transmissao sucesso =  b'/x01'
 
+
+
 def divide_em_payload(array):
     len_pack = 50
     pacotes = [array[i:i + len_pack] for i in range(0, len(array), len_pack)]#percorre array de bytes, dividindo de 50 em 50(len_pack) 
     return pacotes
 
 
-def monta_head(id,len_indiv,len_total,CRC = b'\x02', hs =b'\x00', check = b'\x01' ,final = b'\x00'): #numero do pacote #tamanho do pacote #verifica se a mensagem é um handshake
+def monta_head(id,len_indiv,len_total, CRC = b'\x02\x00', hs =b'\x00', check = b'\x01' ,final = b'\x00'): #numero do pacote #tamanho do pacote #verifica se a mensagem é um handshake
     id_bytes = id.to_bytes(4, byteorder='big')
 
     tamanho_bytes = len_indiv.to_bytes(2, byteorder='big')
     
     packs_total = len_total.to_bytes(1, byteorder='big')
 
+    if CRC != b'\x02\x00':
+        CRC = CRC.to_bytes(2, byteorder='big')
     
     array_nova = id_bytes + tamanho_bytes + CRC + hs + check + packs_total + final # 4,6,8,9,10,11,12
     return array_nova
@@ -132,12 +136,13 @@ def main():
                 print(f'enviando pacote {i} de {len(pacotes)-1}')
 
                 #calcula CRC
-                
+                crc_value = crc16_func(pacotes[i])
+                print(f'calculou o CRC:{crc_value}')
 
 
 
                 #head = monta_head(2,len(pacotes[i]),len_total=total_packs)#testar erro id
-                head = monta_head(i,len(pacotes[i]),len_total=total_packs)
+                head = monta_head(i,len(pacotes[i]),len_total=total_packs, CRC=crc_value)
 
                 #txBuffer = monta_pacote(head,(b'\x02' * 60)) # teste erro len pacote
                 txBuffer = monta_pacote(head,pacotes[i])
