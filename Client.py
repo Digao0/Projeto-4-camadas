@@ -16,6 +16,7 @@ from enlace import *
 import time
 import numpy as np
 import crcmod
+import datetime
 
 
 # voce deverá descomentar e configurar a porta com através da qual ira fazer comunicaçao
@@ -26,7 +27,7 @@ import crcmod
 #use uma das 3 opcoes para atribuir à variável a porta usada
 #serialName = "/dev/ttyACM0"           # Ubuntu (variacao de)
 #serialName = "/dev/tty.usbmodem1411" # Mac    (variacao de)
-serialName = "com5"                  # Windows(variacao de)
+serialName = "com3"                  # Windows(variacao de)
 crc16_func = crcmod.mkCrcFun(0x11021, initCrc=0xFFFF, xorOut=0x000)
 #formulario head:
 #0:4 byte - id do pacote
@@ -37,6 +38,37 @@ crc16_func = crcmod.mkCrcFun(0x11021, initCrc=0xFFFF, xorOut=0x000)
 #11 byte - quantos pacotes serao enviados
 #12 byte - byte de confirmacao final: final Transmissao sucesso =  b'/x01'
 
+#bloco de envio: sendData + log_event()
+
+def log_end_of_transmission(file):
+    """
+    Escreve uma linha de traços no log para marcar o fim da transmissão.
+    """
+    file.write('------------------------------------------Transmissao encerrada\n')
+
+def log_event(file, event_type, msg_type, size, pacote_num=None, total_packs=None, crc=None):
+    """
+    file: Caminho do arquivo de log.
+    event_type: "envio" ou "receb".
+    msg_type: Tipo de mensagem: 3 (dados), 4 (OK), 5 (Erro).
+    size: Tamanho do pacote.
+    pacote_num: Número do pacote (se tipo for 3).
+    total_packs: Total de pacotes (se tipo for 3).
+    crc: CRC do payload (se tipo for 3).
+    """
+    # Pega o timestamp atual
+    timestamp = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S.%f")[:-3]
+    
+    # Cria o log formatado
+    if msg_type == 3:  # Se for um pacote de dados
+        log_line = f"{timestamp} / {event_type} / {msg_type} / {size} / {pacote_num} / {total_packs} / {crc:04X}\n"
+    else:
+        log_line = f"{timestamp} / {event_type} / {msg_type} / {size}\n"
+    
+    # Escreve no arquivo de log
+    #with open(file, 'a') as log_file:
+    #    log_file.write(log_line)
+    file.write(log_line)
 
 
 def divide_em_payload(array):
@@ -66,6 +98,8 @@ def monta_pacote(head,array_dados,end = b'\xff' * 3):
 def main():
     try:
         print("Iniciou o main")
+        file_client = 'registro_client.txt'
+        file_client = open(file_client, 'w')
         #declaramos um objeto do tipo enlace com o nome "com". Essa é a camada inferior à aplicação. Observe que um parametro
         #para declarar esse objeto é o nome da porta.
         com3 = enlace(serialName)
@@ -129,9 +163,13 @@ def main():
 
         rxBuffer , _ = com3.getData(15)
         print (rxBuffer)
+
+        debug = True
+
         if rxBuffer[-3:] == (b'\xff' * 3) and rxBuffer[9] == 1:
             print('envio dos pacotes iniciado')
             for i in range(len(pacotes)):
+                #file_client = 'registro_client.txt'
                 print('entrou no for principal')
                 print(f'enviando pacote {i} de {len(pacotes)-1}')
 
@@ -141,13 +179,19 @@ def main():
 
 
 
-                #head = monta_head(2,len(pacotes[i]),len_total=total_packs)#testar erro id
-                head = monta_head(i,len(pacotes[i]),len_total=total_packs, CRC=crc_value)
+                
+                if debug:
+                    #head = monta_head(3,len(pacotes[3]),len_total=total_packs, CRC=crc_value)#testando erro do id
+                    head = monta_head(i,len(pacotes[i]),len_total=total_packs, CRC=24)#testando erro de CRC 
+                    debug = False
+                else:
+                    head = monta_head(i,len(pacotes[i]),len_total=total_packs, CRC=crc_value)
 
                 #txBuffer = monta_pacote(head,(b'\x02' * 60)) # teste erro len pacote
                 txBuffer = monta_pacote(head,pacotes[i])
 
-                com3.sendData(np.asarray(txBuffer))
+                com3.sendData(np.asarray(txBuffer))#bloco de envio
+                log_event(file_client,'envio', 3, len(pacotes[i]), pacote_num= i, total_packs=total_packs,crc=crc_value)
 
                 time_inicio = time.time()
 
@@ -156,42 +200,57 @@ def main():
                     time.sleep(2)
                     
                     if time.time() - time_inicio >= 6:
+
                         com3.sendData(np.asarray(txBuffer))
+                        log_event(file_client,'envio', 3, len(pacotes[i]), pacote_num= i, total_packs=total_packs,crc=crc_value)
+
                         print(f'mandou denovo o pacote {i}')
                         time_inicio = time.time()
                     #com3.rx.clearBuffer()
                     pass 
                 print('passou do while')
 
-                rxBuffer, nRx = com3.getData(16)
+                rxBuffer, nRx = com3.getData(16)#bloco de recebimento
+
                 print('recebeu confirmacao do getdata')
                 print(f'confirmacao {rxBuffer}')
 
                 print(f'byte de check{rxBuffer[9]}')
-                while rxBuffer[9] != 1:
-                    print('envio com problema, montando e enviando de novo')
-                    head = monta_head(i,len(pacotes[i]),len_total=total_packs)
-                    txBuffer = monta_pacote(head,pacotes[i])
+                if rxBuffer[9] != 1:  # Se houver um erro (ex: CRC ou pacote fora de ordem)
+                    while rxBuffer[9] != 1:
+                        log_event(file_client, 'receb', 5, 16)
 
-                    com3.sendData(np.asarray(txBuffer))
-                    print('pacote reenviado')
+                        # O servidor está solicitando o pacote correto
+                        package_num_solicitado = struct.unpack('>I', rxBuffer[:4])[0]  # Número do pacote solicitado
+                        
+                        print(f"O servidor solicitou o reenvio do pacote {package_num_solicitado}")
+                        crc_corrigido = crc16_func(pacotes[package_num_solicitado])
+                        
+                        # Reenvia o pacote solicitado
+                        head = monta_head(package_num_solicitado, len(pacotes[package_num_solicitado]), len_total=total_packs, CRC=crc_corrigido)
+                        txBuffer = monta_pacote(head, pacotes[package_num_solicitado])
 
-                    while com3.rx.getBufferLen()< 16:
-                        print('esperando resposta do servidor')
-                        time.sleep(2)
-                        pass 
+                        com3.sendData(np.asarray(txBuffer))
+                        log_event(file_client,'envio', 3, len(pacotes[package_num_solicitado]), pacote_num=package_num_solicitado, total_packs=total_packs, crc=crc_corrigido)
+                        
+                        print(f'Pacote {package_num_solicitado} reenviado')
 
-                    rxBuffer, nRx = com3.getData(16)
-                    print('recebeu resposta')
+                        # Aguardar nova confirmação do servidor
+                        rxBuffer, nRx = com3.getData(16)
+                else:
+                    log_event(file_client, 'receb', 4, 16)  # Se a resposta for OK
+            
 
-
-            #rxBuffer, nRx = com3.getData(12)
+            #rxBuffer, nRx = com3.getData(12) nao tirar comentario
             if rxBuffer[11] == 1:
                 print('transmissao bem sucedida')
 
 
 
         # Encerra comunicação
+        log_end_of_transmission(file_client)
+        file_client.close()
+
         print("-------------------------")
         print("Comunicação encerrada")
         print("-------------------------")

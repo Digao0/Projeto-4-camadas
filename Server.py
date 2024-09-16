@@ -14,8 +14,9 @@ from enlace import *
 import time
 import numpy as np
 import struct
-from Client import monta_head,monta_pacote
+from Client import monta_head,monta_pacote,log_event,log_end_of_transmission
 import crcmod
+import datetime
 
 # voce deverá descomentar e configurar a porta com através da qual ira fazer comunicaçao
 #   para saber a sua porta, execute no terminal :
@@ -28,9 +29,12 @@ import crcmod
 serialName = "COM5"                  # Windows(variacao de)
 crc16_func = crcmod.mkCrcFun(0x11021, initCrc=0xFFFF, xorOut=0x000)
 
+
 def main():
     try:
         print("Iniciou o main")
+        file_server = 'registro_server.txt'
+        file_server = open(file_server, 'w')
         #declaramos um objeto do tipo enlace com o nome "com". Essa é a camada inferior à aplicação. Observe que um parametro
         #para declarar esse objeto é o nome da porta.
         com5 = enlace(serialName)
@@ -65,6 +69,7 @@ def main():
                 print(f"Confirmação do handshake enviada {total_packs}")
     
             while True:
+                #file_server = 'registro_server.txt'
                 print('entrou no loop principal')
 
                 head, _ = com5.getData(12)
@@ -87,13 +92,16 @@ def main():
 
                 #calulando CRC
                 CRC_calculado = crc16_func(pacote[:-3])
+                #CRC_calculado = 3 ----------- teste de erro
                 print(f'condicao 3 CRC iguais {CRC_calculado == CRC_esperado}')                
 
                 # Verifica se o número do pacote está correto e se o EOP está no local correto
                 if (package_num == last_package_num + 1) and (pacote[-3:] == (b'\xff' * 3)) and CRC_calculado == CRC_esperado:
                     print('verificação correta')
+                    log_event(file_server,'receb', 3, 16, pacote_num=package_num, total_packs=total_packs, crc=CRC_esperado)
+                    
                     rx_all_buffer.extend(pacote[:-3])  # Adiciona o payload ao buffer (exclui o EOP)
-
+                    
                     if package_num == total_packs - 1:  # Último pacote
                         print(f"Pacote {package_num} de {total_packs-1} recebido. Reagrupando e salvando o arquivo...")
                         with open(imageW, 'wb') as f:
@@ -102,35 +110,51 @@ def main():
                         
                         end_confirm_head = monta_head(0, 12, 1, check=b'\x01', final=b'\x01')
                         end_confirm = monta_pacote(end_confirm_head, b'\x00')
-                        com5.sendData(np.asarray(end_confirm))
+
+                        com5.sendData(np.asarray(end_confirm))  # Bloco de envio OK
+                        log_event(file_server, 'envio', 4, 16)
+
                         print("Confirmação de transmissão finalizada enviada.")
                         break
                     else:
-                        resp_head = monta_head(package_num,1,total_packs)# Confirmação correta
-                        resp = monta_pacote(resp_head,b'\x00')
-                        com5.sendData(np.asarray(resp))
-                        print(f'mandou uma resposta :{resp}')
+                        resp_head = monta_head(package_num, 1, total_packs)  # Confirmação correta
+                        resp = monta_pacote(resp_head, b'\x00')
+
+                        com5.sendData(np.asarray(resp))  # Bloco de envio OK
+                        log_event(file_server, 'envio', 4, 16)
+
+                        print(f'Mandou uma resposta: {resp}')
                         print(f"Pacote {package_num} de {total_packs-1} recebido. Solicitação do próximo pacote.")
                         last_package_num = package_num
                 else:
-                    com5.rx.clearBuffer()
-                    ack = monta_head(package_num, 1,total_packs,check=b'\xf0')  # Solicitação de reenvio (refaz o head)
-                    w = monta_pacote(ack, b'\x00')
-                    com5.sendData(np.asarray(w))
-                    print(f"Pacote {package_num} incorreto ou erro detectado. Solicitação de reenvio.")
-
-                    time_inicio = time.time()
-                    while com5.rx.getBufferLen()< 16:
-                        print('esperando proximo pacote')
-                        time.sleep(2)
-                        if time.time() - time_inicio >= 6:
-                            com5.sendData(np.asarray(w))
-                            print(f'mandou denovo a solicitacao do pacote {package_num}')
-                            time_inicio = time.time()
+                    # Pacote fora de ordem ou erro de CRC
+                    log_event(file_server, 'receb', 5, 16)
+                    
+                    if (package_num != last_package_num + 1):  # Pacote fora de ordem
+                        correct_num = last_package_num + 1
+                        print(f"Pacote fora de ordem! Esperado: {correct_num}, Recebido: {package_num}")
+                        
+                        ack = monta_head(correct_num, 1, total_packs, check=b'\xf0')  # Solicitação de reenvio do pacote correto
+                        w = monta_pacote(ack, b'\x00')
                         com5.sendData(np.asarray(w))
-                        pass
+                        
+                        log_event(file_server, 'envio', 5, 16)
+                        print(f"Solicitação de reenvio do pacote {correct_num} enviada.")
+                    else:
+                        # Erro de CRC
+                        print("Erro de CRC ou problema no EOP!")
+                        ack = monta_head(package_num, 1, total_packs, check=b'\xf0')  # Solicitação de reenvio por erro de CRC
+                        w = monta_pacote(ack, b'\x00')
+                        com5.sendData(np.asarray(w))
+                        
+                        log_event(file_server, 'envio', 5, 16)
+                        print(f"Solicitação de reenvio por erro de CRC ou EOP do pacote {package_num}.")
+
 
         # Encerra comunicação
+        log_end_of_transmission(file_server)
+        file_server.close()
+
         print("-------------------------")
         print("Comunicação encerrada")
         print("-------------------------")
